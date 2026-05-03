@@ -434,7 +434,7 @@ class FanChartApp(QMainWindow):
             name = f"{first_name} {last_name}".strip()
             self.tree_cache[ptr] = {
                 'name': name, 'gen': gen, 'ratio': 0.5, 'ptr': ptr,
-                'text_rotation': 'horizontal' if gen == 0 else 'radial',
+                'text_rotation': 'horizontal' if gen == 0 else ('courbée' if gen <= 4 else 'radial'),
             }
         node_data = self.tree_cache[ptr]
         node_data['gen'] = gen
