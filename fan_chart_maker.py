@@ -3,7 +3,8 @@ import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsScene, QGraphicsView,
                              QGraphicsItem, QVBoxLayout, QHBoxLayout, QWidget,
                              QPushButton, QFileDialog, QSpinBox, QLabel,
-                             QColorDialog, QInputDialog, QComboBox, QMenu, QStatusBar)
+                             QColorDialog, QInputDialog, QComboBox, QMenu, QStatusBar,
+                             QDialog, QLineEdit, QListWidget, QListWidgetItem, QDialogButtonBox)
 from PyQt6.QtGui import QPen, QBrush, QColor, QPainter, QFont, QPainterPath, QPageSize, QPageLayout
 from PyQt6.QtCore import Qt, QRectF, QTimer
 from PyQt6.QtPrintSupport import QPrinter
@@ -142,6 +143,94 @@ class FanCell(QGraphicsItem):
         self.app_ref.draw_tree()
 
 
+class RootSearchDialog(QDialog):
+    """Dialogue de recherche d'un individu racine par prénom et nom."""
+
+    def __init__(self, individuals, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Choisir la personne racine (Sosa 1)")
+        self.setMinimumWidth(560)
+        self.setMinimumHeight(420)
+        self.resize(560, 480)
+
+        self._entries = []
+        for indiv in individuals:
+            first, last = indiv.get_name()
+            first_name = _first_given_name(first)
+            last_name = last.replace("/", "").strip()
+            display = f"{first_name} {last_name}".strip() or "(sans nom)"
+            self._entries.append({
+                'first': first_name.lower(),
+                'last': last_name.lower(),
+                'ptr': indiv.get_pointer(),
+                'label': f"{display}  [{indiv.get_pointer()}]",
+            })
+
+        self._selected_ptr = None
+
+        layout = QVBoxLayout(self)
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("Prénom :"))
+        self.edit_first = QLineEdit()
+        self.edit_first.setPlaceholderText("ex. Jean")
+        self.edit_first.setClearButtonEnabled(True)
+        search_row.addWidget(self.edit_first)
+        search_row.addWidget(QLabel("Nom :"))
+        self.edit_last = QLineEdit()
+        self.edit_last.setPlaceholderText("ex. Dupont")
+        self.edit_last.setClearButtonEnabled(True)
+        search_row.addWidget(self.edit_last)
+        layout.addLayout(search_row)
+
+        self.result_label = QLabel()
+        layout.addWidget(self.result_label)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setAlternatingRowColors(True)
+        layout.addWidget(self.list_widget)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+        self.edit_first.textChanged.connect(self._filter)
+        self.edit_last.textChanged.connect(self._filter)
+        self.list_widget.itemDoubleClicked.connect(self._on_accept)
+
+        self._filter()
+        self.edit_first.setFocus()
+
+    def _filter(self):
+        first_q = self.edit_first.text().strip().lower()
+        last_q = self.edit_last.text().strip().lower()
+        self.list_widget.clear()
+        for entry in self._entries:
+            if first_q and first_q not in entry['first']:
+                continue
+            if last_q and last_q not in entry['last']:
+                continue
+            item = QListWidgetItem(entry['label'])
+            item.setData(Qt.ItemDataRole.UserRole, entry['ptr'])
+            self.list_widget.addItem(item)
+        count = self.list_widget.count()
+        self.result_label.setText(f"{count} résultat(s)")
+        if count > 0:
+            self.list_widget.setCurrentRow(0)
+
+    def _on_accept(self):
+        current = self.list_widget.currentItem()
+        if current:
+            self._selected_ptr = current.data(Qt.ItemDataRole.UserRole)
+            self.accept()
+
+    def selected_ptr(self):
+        return self._selected_ptr
+
+
 class FanChartApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -175,6 +264,10 @@ class FanChartApp(QMainWindow):
         self.gen_spin.setValue(5)
         self.gen_spin.valueChanged.connect(self.draw_tree)
 
+        self.btn_change_root = QPushButton("🔍 Changer la racine")
+        self.btn_change_root.clicked.connect(self.change_root)
+        self.btn_change_root.setEnabled(False)
+
         self.btn_reset = QPushButton("🔄 Réinitialiser l'Arbre")
         self.btn_reset.clicked.connect(self.reset_tree)
         self.btn_reset.setStyleSheet("color: #d32f2f;")
@@ -184,6 +277,7 @@ class FanChartApp(QMainWindow):
         self.btn_export.setFixedHeight(40)
 
         controls.addWidget(self.btn_load)
+        controls.addWidget(self.btn_change_root)
         controls.addWidget(QLabel("Amplitude :"))
         controls.addWidget(self.combo_angle)
         controls.addWidget(QLabel("Générations :"))
@@ -236,27 +330,26 @@ class FanChartApp(QMainWindow):
 
         individuals = [i for i in self.gedcom.get_root_child_elements() if i.get_tag() == "INDI"]
         self.root_ptr = self._ask_root_individual(individuals)
+        self.btn_change_root.setEnabled(True)
         self.reset_tree()
         self.status_bar.showMessage(f"Fichier chargé — {len(individuals)} individu(s) trouvé(s).")
 
     def _ask_root_individual(self, individuals):
         if not individuals:
             return None
-        labels = []
-        for i in individuals:
-            first, last = i.get_name()
-            first_name = _first_given_name(first)
-            last_name = last.replace("/", "").strip()
-            name = f"{first_name} {last_name}".strip() or "(sans nom)"
-            labels.append(f"{name}  [{i.get_pointer()}]")
-        choice, ok = QInputDialog.getItem(
-            self, "Personne racine", "Choisissez la personne racine de l'arbre :",
-            labels, 0, False
-        )
-        if ok and choice:
-            idx = labels.index(choice)
-            return individuals[idx].get_pointer()
+        dlg = RootSearchDialog(individuals, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_ptr():
+            return dlg.selected_ptr()
         return individuals[0].get_pointer()
+
+    def change_root(self):
+        if not self.gedcom:
+            return
+        individuals = [i for i in self.gedcom.get_root_child_elements() if i.get_tag() == "INDI"]
+        new_ptr = self._ask_root_individual(individuals)
+        if new_ptr and new_ptr != self.root_ptr:
+            self.root_ptr = new_ptr
+            self.reset_tree()
 
     # --- Tree management ---
 
