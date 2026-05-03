@@ -5,9 +5,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsScene, QGraphic
                              QPushButton, QFileDialog, QSpinBox, QLabel,
                              QColorDialog, QInputDialog, QComboBox, QMenu, QStatusBar,
                              QDialog, QLineEdit, QListWidget, QListWidgetItem, QDialogButtonBox)
-from PyQt6.QtGui import QPen, QBrush, QColor, QPainter, QFont, QPainterPath, QPageSize, QPageLayout
+from PyQt6.QtGui import QPen, QBrush, QColor, QPainter, QFont, QPainterPath, QPageSize, QPageLayout, QPdfWriter
 from PyQt6.QtCore import Qt, QRectF, QTimer
-from PyQt6.QtPrintSupport import QPrinter
 from gedcom.parser import Parser
 
 _MIN_ZOOM = 0.05
@@ -422,13 +421,13 @@ class FanChartApp(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Export PDF", "Arbre.pdf", "*.pdf")
         if not path:
             return
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setPageSize(QPageSize(QPageSize.PageSizeId.A2))
-        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-        printer.setOutputFileName(path)
-        painter = QPainter(printer)
-        self.scene.render(painter, QRectF(printer.pageRect(QPrinter.Unit.DevicePixel)), self.scene.sceneRect())
+        writer = QPdfWriter(path)
+        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A2))
+        writer.setPageOrientation(QPageLayout.Orientation.Landscape)
+        writer.setResolution(150)
+        painter = QPainter(writer)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.scene.render(painter, QRectF(), self.scene.sceneRect())
         painter.end()
         self.status_bar.showMessage(f"PDF exporté : {path}")
 
