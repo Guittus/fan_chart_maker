@@ -3,7 +3,8 @@ import math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QGraphicsScene, QGraphicsView,
                              QGraphicsItem, QVBoxLayout, QHBoxLayout, QWidget,
                              QPushButton, QFileDialog, QSpinBox, QLabel,
-                             QColorDialog, QInputDialog, QComboBox, QMenu, QStatusBar,
+                             QColorDialog, QInputDialog, QComboBox, QFontComboBox,
+                             QMenu, QStatusBar,
                              QDialog, QLineEdit, QListWidget, QListWidgetItem, QDialogButtonBox)
 from PyQt6.QtGui import QPen, QBrush, QColor, QPainter, QFont, QPainterPath, QPageSize, QPageLayout, QPdfWriter
 from PyQt6.QtCore import Qt, QRectF, QTimer
@@ -49,6 +50,7 @@ class FanCell(QGraphicsItem):
         self.path = self._calculate_path()
         self.color = node_data.get('color', QColor(245, 245, 245) if node_data['gen'] % 2 == 0 else QColor(225, 235, 245))
         self.font_size = node_data.get('font_size', max(4, 9 - node_data['gen']))
+        self.text_rotation = node_data.get('text_rotation', 'horizontal' if node_data['gen'] == 0 else 'radial')
         self.highlighted = False
         # Populated by build_recursive after children are created
         self.parent_cells: dict[str, 'FanCell | None'] = {}
@@ -76,23 +78,77 @@ class FanCell(QGraphicsItem):
         painter.setBrush(QBrush(fill))
         painter.setPen(QPen(QColor(80, 80, 80), 0.5))
         painter.drawPath(self.path)
-        if math.degrees(self.end_a - self.start_a) > 1.2:
-            mid_a = (self.start_a + self.end_a) / 2
-            painter.save()
+        if math.degrees(self.end_a - self.start_a) < 1.2:
+            return
+        font_family = self.app_ref.font_combo.currentFont().family()
+        painter.setFont(QFont(font_family, int(self.font_size)))
+        painter.setPen(Qt.GlobalColor.black)
+        if self.node_data['gen'] == 0:
+            painter.drawText(QRectF(-80, -80, 160, 160), Qt.AlignmentFlag.AlignCenter, self.node_data['name'])
+            return
+        mid_a = (self.start_a + self.end_a) / 2
+        mid_r = (self.r_in + self.r_out) / 2
+        rotation = self.text_rotation
+        if rotation == 'courbée':
+            self._draw_curved_text(painter, self.node_data['name'], mid_r)
+            return
+        painter.save()
+        if rotation == 'radial':
             painter.rotate(math.degrees(mid_a))
-            painter.translate((self.r_in + self.r_out) / 2, 0)
+            painter.translate(mid_r, 0)
             if 90 < (math.degrees(mid_a) % 360) < 270:
                 painter.rotate(180)
-            painter.setFont(QFont("Segoe UI", int(self.font_size)))
-            painter.setPen(Qt.GlobalColor.black)
-            painter.drawText(QRectF(-45, -45, 90, 90), Qt.AlignmentFlag.AlignCenter, self.node_data['name'])
+        elif rotation == 'horizontal':
+            painter.translate(math.cos(mid_a) * mid_r, math.sin(mid_a) * mid_r)
+        elif rotation == 'vertical':
+            painter.translate(math.cos(mid_a) * mid_r, math.sin(mid_a) * mid_r)
+            painter.rotate(-90)
+        painter.drawText(QRectF(-45, -45, 90, 90), Qt.AlignmentFlag.AlignCenter, self.node_data['name'])
+        painter.restore()
+
+    def _draw_curved_text(self, painter, text, mid_r):
+        """Dessine chaque caractère tangentiellement le long de l'arc à rayon mid_r."""
+        fm = painter.fontMetrics()
+        mid_a = (self.start_a + self.end_a) / 2
+
+        char_widths = [fm.horizontalAdvance(c) for c in text]
+        total_width = sum(char_widths)
+        total_angle = total_width / mid_r  # radians occupés par le texte
+
+        current_a = mid_a - total_angle / 2
+        rot_offset = +90
+
+        h = fm.height()
+        for char, cw in zip(text, char_widths):
+            char_a = current_a + cw / (2 * mid_r)
+            painter.save()
+            painter.translate(mid_r * math.cos(char_a), mid_r * math.sin(char_a))
+            painter.rotate(math.degrees(char_a) + rot_offset)
+            painter.drawText(QRectF(-cw / 2, -h / 2, cw, h), Qt.AlignmentFlag.AlignCenter, char)
             painter.restore()
+            current_a += cw / mid_r
 
     def contextMenuEvent(self, event):
         menu = QMenu()
         ex_f = menu.addAction("♂️ Élargir Paternelle")
         ex_m = menu.addAction("♀️ Élargir Maternelle")
         reset = menu.addAction("🔄 Ratio 50/50")
+        menu.addSeparator()
+        size_action = menu.addAction("📏 Taille de police…")
+
+        orient_menu = menu.addMenu("↻ Orientation du texte")
+        if self.node_data['gen'] == 0:
+            orient_menu.setEnabled(False)
+        else:
+            act_radial = orient_menu.addAction("Radiale")
+            act_horiz = orient_menu.addAction("Horizontale")
+            act_vert = orient_menu.addAction("Verticale")
+            act_curved = orient_menu.addAction("Courbée")
+            for act, val in [(act_radial, 'radial'), (act_horiz, 'horizontal'),
+                             (act_vert, 'vertical'), (act_curved, 'courbée')]:
+                act.setCheckable(True)
+                act.setChecked(self.text_rotation == val)
+
         menu.addSeparator()
         edit = menu.addAction("🎨 Personnaliser")
 
@@ -112,11 +168,21 @@ class FanCell(QGraphicsItem):
 
         action = menu.exec(event.screenPos())
         if action == ex_f:
-            self.node_data['ratio'] = max(0.1, self.node_data['ratio'] - 0.05)  # pivot ← → père (droite) grandit
+            self.node_data['ratio'] = max(0.1, self.node_data['ratio'] - 0.05)
         elif action == ex_m:
-            self.node_data['ratio'] = min(0.9, self.node_data['ratio'] + 0.05)  # pivot → → mère (gauche) grandit
+            self.node_data['ratio'] = min(0.9, self.node_data['ratio'] + 0.05)
         elif action == reset:
             self.node_data['ratio'] = 0.5
+        elif action == size_action:
+            size, ok = QInputDialog.getInt(None, "Taille de police", "Taille :", self.font_size, 1, 60)
+            if ok:
+                self.font_size = size
+                self.node_data['font_size'] = size
+        elif self.node_data['gen'] != 0 and action in (act_radial, act_horiz, act_vert, act_curved):
+            mapping = {act_radial: 'radial', act_horiz: 'horizontal',
+                       act_vert: 'vertical', act_curved: 'courbée'}
+            self.text_rotation = mapping[action]
+            self.node_data['text_rotation'] = self.text_rotation
         elif action == edit:
             self._show_edit_dialog()
             return
@@ -133,10 +199,6 @@ class FanCell(QGraphicsItem):
         if color.isValid():
             self.color = color
             self.node_data['color'] = color
-        size, ok = QInputDialog.getInt(None, "Taille de police", "Taille :", self.font_size, 1, 60)
-        if ok:
-            self.font_size = size
-            self.node_data['font_size'] = size
         # Redessine la scène entière — self.update() planterait si la scène
         # a été reconstruite pendant l'ouverture des dialogs modaux
         self.app_ref.draw_tree()
@@ -254,6 +316,10 @@ class FanChartApp(QMainWindow):
         self.btn_load = QPushButton("📂 Charger GEDCOM")
         self.btn_load.clicked.connect(self.load_gedcom)
 
+        self.font_combo = QFontComboBox()
+        self.font_combo.setCurrentFont(QFont("Segoe UI"))
+        self.font_combo.currentFontChanged.connect(self.draw_tree)
+
         self.combo_angle = QComboBox()
         self.combo_angle.addItems(["360°", "345°", "270°", "180°"])
         self.combo_angle.currentIndexChanged.connect(self.draw_tree)
@@ -277,6 +343,8 @@ class FanChartApp(QMainWindow):
 
         controls.addWidget(self.btn_load)
         controls.addWidget(self.btn_change_root)
+        controls.addWidget(QLabel("Police :"))
+        controls.addWidget(self.font_combo)
         controls.addWidget(QLabel("Amplitude :"))
         controls.addWidget(self.combo_angle)
         controls.addWidget(QLabel("Générations :"))
@@ -364,7 +432,10 @@ class FanChartApp(QMainWindow):
             first_name = _first_given_name(first)
             last_name = last.replace("/", "").strip()
             name = f"{first_name} {last_name}".strip()
-            self.tree_cache[ptr] = {'name': name, 'gen': gen, 'ratio': 0.5, 'ptr': ptr}
+            self.tree_cache[ptr] = {
+                'name': name, 'gen': gen, 'ratio': 0.5, 'ptr': ptr,
+                'text_rotation': 'horizontal' if gen == 0 else 'radial',
+            }
         node_data = self.tree_cache[ptr]
         node_data['gen'] = gen
         return node_data
